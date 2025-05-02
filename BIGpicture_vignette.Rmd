@@ -1,0 +1,877 @@
+---
+title: "BIGpicture vignette"
+subtitle: "Useful plot wrappers for ggplot2"
+author: "Kim Dill-McFarland, kadm@uw.edu"
+date: "version `r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: no
+editor_options:
+  chunk_output_type: console
+urlcolor: blue
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(fig.height=3, fig.width = 8.5) 
+```
+
+# Overview
+
+This package provides a number of plot wrappers that create common bioinformatic analyses visualizations and work with results from our other packages, such as `kimma` and `SEARchways`. As such, you will need to install and load several packages to access example data.
+
+![](figures/intro_diagram2-01.png)
+
+# Setup
+## Software and packages
+
+This pipeline should be completed in `r base::R.Version()$version.string` or newer. Please also download the following packages.
+
+```{r eval=FALSE}
+# CRAN packages
+install.packages(c("tidyverse","patchwork"))
+
+# Bioconductor packages
+## These are dependencies for kimma that are beneficial to download separately
+install.packages("BiocManager")
+BiocManager::install(c("limma", "edgeR"))
+
+# GitHub packages
+install.packages("devtools")
+devtools::install_github("BIGslu/kimma")
+devtools::install_github("BIGslu/BIGpicture")
+devtools::install_github("BIGslu/RNAetc")
+devtools::install_github("BIGslu/SEARchways")
+```
+
+And load them into your current R session.
+
+```{r warning=FALSE}
+library(tidyverse)
+library(edgeR)
+library(limma)
+library(kimma)
+library(BIGpicture)
+library(SEARchways)
+library(patchwork)
+```
+
+To ensure reproducibility with this document, set the random seed value.
+
+```{r}
+set.seed(651)
+```
+
+## Data background
+
+Example data were obtained from media controls and human rhinovirus (HRV) infected human plasmacytoid dendritic cells. You can learn more about these data in
+
+>Dill-McFarland KA, Schwartz JT, Zhao H, Shao B, Fulkerson PC, Altman MC, Gill MA. 2022. Eosinophil-mediated suppression and Anti-IL-5 enhancement of plasmacytoid dendritic cell interferon responses in asthma. J Allergy Clin Immunol. Epub ahead of print. doi: [10.1016/j.jaci.2022.03.025](https://doi.org/10.1016/j.jaci.2022.03.025). --- [GitHub](https://github.com/altman-lab/P259_pDC_public)
+
+Specifically, this vignette uses bulk human RNA-seq processed from fastq to counts using [SEAsnake][pipeline1] and counts to voom using [edgeR/limma][pipeline2]. This results in voom-normalized, log2 counts per million (CPM) gene expression and associated sample and gene metadata. In total, 6 donors and 1000 random genes were selected for this vignette. Actual donor identifiers have been altered for privacy. 
+
+## Load data
+
+Unnormalized RNAseq counts and metadata.
+
+```{r}
+example.dat <- kimma::example.dat
+names(example.dat)
+```
+
+Voom normalized RNAseq counts and metadata.
+
+```{r}
+example.voom <- kimma::example.voom
+names(example.voom)
+```
+
+kmFit model results.
+
+```{r}
+example.model <- BIGpicture::example.model
+```
+
+Create an additional kmFit model for plotting.
+
+```{r}
+example.model2 <- kimma::kmFit(
+  dat = example.voom,
+  model = "~virus*asthma + median_cv_coverage + (1|ptID)",
+  run_lme = TRUE, use_weights = TRUE, metrics = TRUE)
+```
+
+Create example enrichment results.
+
+```{r}
+enrich <- SEARchways::flexEnrich(
+  gene_list = list("HRV1"=names(SEARchways::example.gene.list$HRV1),
+                   "HRV2"=names(SEARchways::example.gene.list$HRV2)),
+  ID = "ENSEMBL", species = "human", 
+  collection = "H")
+
+gsea <- SEARchways::BIGsea(
+  gene_list = SEARchways::example.gene.list,
+  ID = "ENSEMBL", species = "human", 
+  collection = "C2", subcollection = "CP")
+```
+
+# RNAseq data cleaning
+## Mean-variance trend
+
+Used in RNAseq data cleaning [counts to voom][pipeline2] to visualize the association of expression on the X with variance on the Y. 
+
+```{r fig.width=4}
+plot_mv(dat = example.dat, design = "~ virus")
+```
+
+# PCA
+## `plot_pca`: PCA all in one
+
+Calculate, annotate, and plot a PCA representing gene expression. By default, we assume unique library IDs are contained in the column `libID`. Change this with the `libraryID` parameter.
+
+When running on unnormalized data, transform the counts to log counts per million.
+
+```{r}
+plot_pca(dat = example.dat, 
+         vars = "virus",
+         scale = TRUE,
+         transform_logCPM = TRUE)
+```
+
+When running on normalized data, don't transform the data (default).
+
+```{r}
+plot_pca(dat = example.voom, 
+         vars = "virus",
+         scale = TRUE)
+```
+
+Automatically identify outliers in PC space. See `outlier_group` parameter to define outliers within groups independently.
+
+```{r}
+plot_pca(dat = example.voom, 
+         vars = "outlier", outlier_sd = 3,
+         scale = TRUE)
+```
+
+Plot multiple variables and visualize together with `patchwork`.
+
+```{r fig.height=5}
+plot_pca(dat = example.voom, 
+         vars = c("virus","asthma","median_cv_coverage", "norm.factors"),
+         scale = TRUE) %>% 
+  patchwork::wrap_plots(nrow=2)
+```
+
+Other parameters
+
+* View different PCs using `PCx` and `PCy`
+* Define outliers within groups independently with `outlier_group`
+* Define a difference unique identifier column with `libraryID`
+
+Coming soon: `plot_pca2`
+
+# Linear modeling
+## Model fit
+### `plot_fit2`: Compare fit metrics
+
+These functions use the output from `kimma::kmFit`.
+
+Compare model fits between 2 models. Note that it is important to choose comparable models - this means the same number of samples and changing only 1 model attribute at a time e.g. adding a covariate, adding weights, adding a random effect, etc. Be careful if you have missing data. For example, if you have `~ variable` vs `~ variable + covariate` but the `covariate` has some missing data, changes in fit could be due to the `covariate` itself and/or the smaller sample size since samples missing *any* model variable are removed during modeling.
+
+Here, we compare a model with and without kinship correction. The kmFit result has two model results (lme and lmerel), so you need only 1 model result input. Note the results printed in the console. These summarize genes better fit by one model or another. An absolute change in AIC > 7 is significant, change from 2-7 is moderate, and < 2 is non-significant. These cutoffs are also shown as red lines in the plot.
+
+```{r fig.width=4.5}
+names(example.model)
+
+plot_fit2(model_result = example.model,
+          x="lme", y="lmerel", metrics = "AIC")
+```
+
+If you're models are in two separate objects:
+
+```{r fig.width=4.5}
+plot_fit2(model_result = example.model, x="lme",
+          model_result_y = example.model2, y="lme",
+          metrics = "AIC")
+```
+
+Note that the model name is not very readable. You can change the labels.
+
+```{r fig.width=4.5}
+plot_fit2(model_result = example.model, x="lme", 
+          x_label = "no covariate",
+          model_result_y = example.model2, y="lme", 
+          y_label = "+medianCV",
+          metrics = "AIC")
+```
+
+Plot a different metric. Choose anything in `example.model$lme.fit` or similar. Note that the cutoffs only apply to AIC and BIC
+
+```{r}
+plot_fit2(model_result = example.model,
+          x="lme", y="lmerel", 
+          metrics = c("BIC","Rsq"))
+```
+
+Add dots to see outlying genes.
+
+```{r fig.width=4.5}
+plot_fit2(model_result = example.model, x="lme", 
+          x_label = "no covariate",
+          model_result_y = example.model2, y="lme", 
+          y_label = "+medianCV",
+          metrics = "AIC",
+          outliers = TRUE)
+```
+
+Label genes with the largest changes in fit.
+
+```{r fig.width=4.5}
+plot_fit2(model_result = example.model, x="lme", 
+          x_label = "no covariate",
+          model_result_y = example.model2, y="lme", 
+          y_label = "+medianCV",
+          metrics = "AIC",
+          label = 3)
+```
+
+Change the labels to another gene identifier.
+
+```{r fig.width=4.5}
+plot_fit2(model_result = example.model, x="lme", 
+          x_label = "no covariate",
+          model_result_y = example.model2, y="lme", 
+          y_label = "+medianCV",
+          metrics = "AIC",
+          label = 3, 
+          genes = example.voom$genes, genes_label = "hgnc_symbol")
+```
+
+Only plot a subset of genes.
+
+```{r fig.width=4.5}
+plot_fit2(model_result = example.model, x="lme", 
+          x_label = "no covariate",
+          model_result_y = example.model2, y="lme", 
+          y_label = "+medianCV",
+          metrics = "AIC",
+          subset_genes = example.voom$genes$geneName[1:100])
+```
+
+## Significant results
+### `plot_volcano`: Volcano plot
+
+Plot all variables from one model.
+
+```{r fig.width=4}
+plot_volcano(model_result = example.model, model = "lme")
+```
+
+Select variable(s) of interest.
+
+```{r fig.width=4}
+plot_volcano(model_result = example.model, model = "lme",
+             variables = "virus")
+```
+
+Plot uncorrected P-values instead of FDR.
+
+```{r fig.width=4}
+plot_volcano(model_result = example.model, model = "lme",
+             variables = "virus",
+             y="pval")
+```
+
+Color significant genes based on FDR and/or estimate.
+
+```{r fig.width=4}
+plot_volcano(model_result = example.model, model = "lme",
+             variables = "virus",
+             x_cutoff = 1, y_cutoff = 0.05)
+```
+
+Label most significant genes.
+
+```{r fig.width=4}
+plot_volcano(model_result = example.model, model = "lme",
+             variables = "virus",
+             x_cutoff = 1, y_cutoff = 0.05,
+             label = 3)
+```
+
+Change the gene labels to a different gene indentifier.
+
+```{r fig.width=4}
+plot_volcano(model_result = example.model, model = "lme",
+             variables = "virus",
+             x_cutoff = 1, y_cutoff = 0.05,
+             label = 3,
+             genes = example.voom$genes,
+             genes_label = "hgnc_symbol")
+```
+
+### `plot_venn_genes`: Venn plot of DEGs
+
+Functions the same as `plot_upset_genes`.
+
+Plot all variables at multiple FDR cutoffs.
+
+```{r fig.height=8}
+plot_venn_genes(model_result = example.model, 
+                models = "lme")$venn %>% 
+  patchwork::wrap_plots(ncol=2)
+```
+
+Select specific FDR cutoff(s).
+
+```{r fig.height=3}
+plot_venn_genes(model_result = example.model, 
+                models = "lme",
+                fdr_cutoff = 0.05)
+```
+
+Select variable(s) of interest.
+
+```{r fig.height=3}
+plot_venn_genes(model_result = example.model, 
+                models = "lme",
+                fdr_cutoff = 0.05,
+                variables = c("asthma","virus"))
+```
+
+If you're using a contrasts model, specify contrasts instead.
+
+```{r fig.height=3}
+plot_venn_genes(model_result = example.model, 
+                models = "lme.contrast",
+                fdr_cutoff = 0.05,
+                contrasts = c("HRV healthy - none healthy",
+                              "HRV asthma - none asthma"))
+```
+
+Include the random effect and/or intercept if the model has one.
+
+```{r fig.height=3}
+plot_venn_genes(model_result = example.model, 
+                models = "lme",
+                fdr_cutoff = 0.05,
+                random = TRUE, intercept = TRUE)
+```
+
+Save the genes in each part of the Venn's overlap for downstream analyses.
+
+```{r fig.height=3}
+venn_result <- plot_venn_genes(model_result = example.model, 
+                models = "lme",
+                fdr_cutoff = 0.05,
+                return_genes = TRUE)
+venn_result$venn
+venn_result$gene$`0.05` %>% head
+```
+  
+Compare DEGs in two different models. 
+
+```{r fig.height=3}
+plot_venn_genes(model_result = list("noCov"=example.model,
+                                    "medianCV"=example.model2), 
+                models = "lme",
+                variables = "virus",
+                fdr_cutoff = 0.05)
+```
+
+Note that labels might get cutoff if they are too long, so you may need to expand the plot limits. A good way to do this is to first find the current limits by adding a theme with xy axes and then setting `lims` on the single Venn result. For example, here we expand the y limits (even though the labels are not cutoff).
+
+```{r fig.height=3}
+plot_venn_genes(model_result = list("noCov"=example.model,
+                                    "medianCV"=example.model2), 
+                models = c("lme","lme"),
+                variables = "virus",
+                fdr_cutoff = 0.05)$venn$`0.05` +
+  theme_bw()
+
+plot_venn_genes(model_result = list("noCov"=example.model,
+                                    "medianCV"=example.model2), 
+                models = c("lme","lme"),
+                variables = "virus",
+                fdr_cutoff = 0.05)$venn$`0.05` +
+  lims(y=c(-1,2))
+```
+
+### `plot_upset_genes`: Upset plot of DEGs
+
+Functions the same as `plot_venn_genes`.
+
+Plot all variables at multiple FDR cutoffs.
+
+```{r fig.height=6}
+plot_upset_genes(model_result = example.model, 
+                models = "lme")$upset %>% 
+  patchwork::wrap_plots(ncol=2)
+```
+
+Select specific FDR cutoff(s).
+
+```{r fig.height=3}
+plot_upset_genes(model_result = example.model, 
+                models = "lme",
+                fdr_cutoff = 0.05)
+```
+
+Select variable(s) of interest.
+
+```{r fig.height=3}
+plot_upset_genes(model_result = example.model, 
+                models = "lme",
+                fdr_cutoff = 0.05,
+                variables = c("asthma","virus"))
+```
+
+If you're using a contrasts model, specify contrasts instead.
+
+```{r fig.height=3}
+plot_upset_genes(model_result = example.model, 
+                models = "lme.contrast",
+                fdr_cutoff = 0.5,
+                contrasts = c("HRV healthy - none healthy",
+                              "HRV asthma - none asthma"))
+```
+
+Include the random effect and/or intercept if the model has one.
+
+```{r fig.height=3}
+plot_upset_genes(model_result = example.model, 
+                models = "lme",
+                fdr_cutoff = 0.05,
+                random = TRUE, intercept = TRUE)
+```
+
+Save the genes in each part of the Venn's overlap for downstream analyses.
+
+```{r fig.height=3}
+upset_result <- plot_upset_genes(model_result = example.model, 
+                models = "lme",
+                fdr_cutoff = 0.05,
+                return_genes = TRUE)
+upset_result$upset
+upset_result$gene$`0.05` %>% head
+```
+  
+Compare DEGs in two different models. 
+
+```{r fig.height=3}
+plot_upset_genes(model_result = list("noCov"=example.model,
+                                    "medianCV"=example.model2), 
+                models = "lme",
+                variables = "virus",
+                fdr_cutoff = 0.05)
+```
+
+### `plot_genes`: Expression and model result summary for 1 gene
+
+A single wrapper function to get a table of model result and boxplots associated with model variables for one gene at a time.
+
+```{r warning=FALSE, fig.height=4}
+plot_genes(dat = example.voom,
+           fdr = example.model$lme,
+           subset_genes = "ENSG00000173950",
+           variables = "virus")
+```
+
+Plot multiple variables including interaction terms, which also add the main model terms associated with the interaction (e.g. if A:B, also plots A and B)
+
+```{r warning=FALSE, fig.height=6}
+plot_genes(dat = example.voom,
+           fdr = example.model$lme,
+           subset_genes = "ENSG00000173950",
+           variables = "virus:asthma")
+```
+
+Color boxplots by a variable of interest. This can be a variable already being plotted or a new variable.
+
+```{r warning=FALSE, fig.height=4}
+plot_genes(dat = example.voom,
+           fdr = example.model$lme,
+           subset_genes = "ENSG00000173950",
+           variables = c("virus","asthma"),
+           colorID = "virus")
+
+plot_genes(dat = example.voom,
+           fdr = example.model$lme,
+           subset_genes = "ENSG00000173950",
+           variables = c("virus","asthma"),
+           colorID = "ptID")
+```
+
+Plot many genes quickly using multiple processors. Not run in this document to save space.
+
+```{r eval=FALSE}
+deg <- example.model$lme %>% filter(FDR<0.001) %>% pull(gene)
+length(deg)
+
+plot.ls <- plot_genes(dat = example.voom,
+                      fdr = example.model$lme,
+                      subset_genes = deg,
+                      variables = "virus",
+                      processors = 6)
+
+#Save each plot
+#Change settings as needed
+outdir <- "~/Desktop/"
+fig.width <- 8
+fig.height <- 5
+
+for(gene in names(plot.ls)){
+  f <- paste0(outdir, gene, ".png")
+  ggsave(filename = f, plot = plot.ls[[gene]], 
+         width = fig.width, height = fig.height)
+}
+```
+
+Other parameters
+
+* You can also provide expression data not in a `edgeR` or `voom` object with `counts`, `meta`, and optionally `genes`
+* If your data have different variable names, use `libraryID` and `geneID` to change them
+
+# Gene set enrichment
+## Hypergeometric / pathway enrichment / Fisher's exact test
+
+These functions use the outputs from `SEARchways::BIGprofiler` and `SEARchways::flexEnrich`.
+
+### `plot_enrich2`: Lollipop plot
+
+The default plot for `plot_enrich2` is what we call a lollipop plot, and it only shows results with FDR < 0.2.
+
+```{r}
+plot_enrich2(df = enrich)
+```
+
+### `plot_enrich2`: Dotplot
+
+Change the `chart_style` to a dotplot
+
+```{r}
+plot_enrich2(df = enrich,
+             fdr_cutoff = 0.3,
+             chart_style = "dot")
+```
+
+Use an outline to denote results below an FDR cutoff. Note this only applies to dotplots.  
+
+```{r}
+plot_enrich2(df = enrich,
+             fdr_cutoff = 0.3,
+             chart_style = "dot",
+             dot_sig_cutoff = 0.2)
+```
+
+### `plot_enrich2`: Barplot
+
+Change the `chart_style` to a barplot.
+
+Note that barplots can only be created with a single group of enrichment results.
+
+```{r}
+plot_enrich2(df = enrich %>%
+               dplyr::filter(group=="HRV2"),
+             fdr_cutoff = 0.3,
+             chart_style = "bar")
+```
+
+### `plot_enrich2`: Shared parameters {#enrich2}
+
+You can change the FDR cutoff and/or FDR colors groups.
+
+```{r}
+plot_enrich2(df = enrich,
+             fdr_cutoff = 0.3,
+             fdr_binned_colors = c(0.2, 0.3, 1))
+```
+
+For set the FDR coloring to a log color gradient.
+
+```{r}
+plot_enrich2(df = enrich,
+             fdr_cutoff = 0.3,
+             fdr_continuous = TRUE)
+```
+
+Order the gene sets / pathways. By default, they are ordered by fdr. You can also order by "hclust" of gene membership, "overlap_size", "gs_size", "ratio", "fdr", or "input".
+
+```{r}
+plot_enrich2(df = enrich,
+             fdr_cutoff = 0.3,
+             y_grouping_method = "gs_size")
+
+plot_enrich2(df = enrich,
+             fdr_cutoff = 0.3,
+             y_grouping_method = "hclust")
+
+#etc...
+```
+
+Add total gene set sizes.
+
+```{r}
+plot_enrich2(df = enrich,
+             fdr_cutoff = 0.3,
+             include_gssize = TRUE)
+```
+
+Other parameters
+
+* Change the data column names to match your data if you are not using `SEARchways` results with `_col` parameters (`pathway_col`, `gene_col`, `ratio_col`, `fdr_col`, `gssize_col`, `dot_groupcol`)
+    - These parameters can also be used to change which variable is mapped to which plot aesthetic.
+    
+### `plot_enrichgrid`: Add gene level info to `plot_enrich2` plot
+
+```{r fig.height=4}
+#Modify pathway names for a prettier plot
+enrich <- enrich %>% 
+  mutate(pathway = gsub("HALLMARK_","",pathway),
+         pathway = gsub("_","\n",pathway))
+
+plot_enrichgrid(df = enrich, 
+                df_group = "HRV2")
+```
+
+```{r fig.height=4}
+plot_enrichgrid(df = enrich, 
+                df_group = "HRV2",
+                chart_style = "lollipop")
+```
+
+Order genes in the heatmap including "hclust", "prevalence", "input", "alphabetical", or "geneset".
+
+```{r fig.height=4}
+plot_enrichgrid(df = enrich, 
+                df_group = "HRV2",
+                x_grouping_method = "prevalence")
+```
+
+Color genes by a binary prevalence cutoff instead of a heatmap. 
+
+```{r fig.height=4}
+plot_enrichgrid(df = enrich, 
+                df_group = "HRV2",
+                prevalence_color = "cutoff",
+                prevalence_cutoff = 0.5)
+```
+
+Only plot specific genes of interest.
+
+```{r fig.height=4}
+plot_enrichgrid(df = enrich, 
+                df_group = "HRV2",
+                custom_genelist = c("ENSG00000023228", "ENSG00000158864"))
+```
+
+Quickly get the equivalent plot without the gene grid without having to convert to `plot_enrich2`.
+
+```{r}
+plot_enrichgrid(df = enrich, 
+                df_group = "HRV2",
+                include_grid = FALSE)
+```
+  
+Other parameters
+
+* See `plot_enrich2` [Shared parameters](#enrich2) for info on `fdr_cutoff`, `fdr_binned_colors`, `y_grouping_method`, `pathway_col`, `gene_col`, `ratio_col`, `fdr_col`, `gssize_col` 
+* Note that `chart_style` only supports "bar" or "lollipop" for this function
+  
+## GSEA: Gene set enrichment analysis
+
+### `plot_gsea`: Lollipop plot
+Plot a lollipop plot of GSEA normalized enrichment scores (NES).
+Will be superseded by `plot_fit2`.
+
+Here, we use a ridiculous FDR cutoff, because there are actually no significant results in the example data.
+
+```{r eval=FALSE}
+plot_gsea(gsea = gsea, 
+          fdr_cutoff = 0.8, fdr_colors = c(0.5))
+```
+
+# STRING network
+
+Get some genes of interest. These can be ENSEMBL or HGNC. Here, we pull some genes from gene sets in MSigDB, but you may wish to plot DEGs, GSEA leading edge, etc.
+
+```{r}
+db <- msigdbr::msigdbr(species = "Homo sapiens", collection = "H")
+genes <- db %>% 
+  filter(gs_name %in% c("HALLMARK_OXIDATIVE_PHOSPHORYLATION",
+                        "HALLMARK_HYPOXIA"))%>% 
+  pull(ensembl_gene) %>% unique()
+genes <- genes[c(1:20,250:270)]
+#Add some results from enrichment so plot is more interesting
+genes <- unique(c(genes, "ENSG00000079739", "ENSG00000105220", "ENSG00000114023", 
+           "ENSG00000122863", "ENSG00000136521", "ENSG00000154174", 
+           "ENSG00000158864", "ENSG00000023228"))
+```
+
+## `map_string`: Map genes to STRING database
+
+Map genes of interest to the STRING network database. You can update the STRING version as needed. By default, connections are retained with combined score > 400 (e.g. medium confidence).
+
+```{r}
+map <- map_string(genes, version = 12.0)
+names(map)
+head(map$map)
+```
+
+Change the combined scored threshold. For example, to "strong" confidence connections.
+
+```{r}
+map <- map_string(genes, version = 12.0,
+                  score_threshold = 700)
+```
+
+Other parameters
+
+* You can switch to mouse data with `species = 'mouse'`
+
+## `plot_string`: Plot a STRING map
+
+Now you can plot the STRING network map.
+
+```{r fig.height=4}
+plot_string(map = map)
+```
+
+Control the layout if you don't like the automatically chosen one. See options in `igraph::layout_with_`
+
+```{r fig.height=4}
+plot_string(map = map,
+            layout = "mds")
+
+plot_string(map = map,
+            layout = "kk")
+```
+
+Remove orphans (nodes with no edge connections).
+
+```{r fig.height=4}
+plot_string(map = map,
+            edge_min = 1)
+```
+
+Plot just orphans (nodes with no edge connections).
+
+```{r fig.height=4}
+plot_string(map = map, 
+            edge_max = 0)
+```
+
+Plot just the largest cluster. The large "lgl" layout is usually best for these.
+
+```{r fig.height=4}
+plot_string(map = map, layout = "lgl",
+            main_cluster_only = TRUE)
+```
+
+Map enrichment or GSEA results from `SEARchways` to your network.
+
+```{r fig.height=4}
+enrich.select <- enrich %>% 
+  filter(group=="HRV2")
+
+plot_string(map = map, layout = "lgl",
+            main_cluster_only = TRUE,
+            enrichment = enrich.select)
+```
+
+Change the cutoffs of what enrichment results are included.
+
+```{r fig.height=4}
+plot_string(map = map, layout = "lgl",
+            main_cluster_only = TRUE,
+            enrichment = enrich.select,
+            overlap = 1, fdr_cutoff = 0.5)
+```
+
+Only included genes in selected (by cutoffs) enrichment pathways.
+
+```{r fig.height=4}
+plot_string(map = map, layout = "lgl",
+            main_cluster_only = TRUE,
+            enrichment = enrich.select,
+            overlap = 1, fdr_cutoff = 0.5,
+            enriched_only = TRUE)
+```
+
+Change the aesthetics of the plot.
+
+```{r fig.height=4}
+plot_string(map = map, layout = "lgl",
+            main_cluster_only = TRUE,
+            enrichment = enrich.select,
+            text_size = 1,
+            node_size = 2,
+            colors = c("#CC6677", "#44AA99", "grey"))
+```
+
+# Heatmap
+## `get_hm_clust`: Extract genes in `ComplexHeatmap` clusters
+
+Create a heatmap to apply the function to.
+
+```{r}
+library(ComplexHeatmap)
+
+hm.dat <- example.model$lme %>%
+          select(gene, variable, pval) %>%
+          pivot_wider(names_from = variable, values_from = pval) %>%
+          column_to_rownames("gene") %>% as.matrix()
+
+# The km determine cutoffs for clusters
+example.hm <- Heatmap(hm.dat, row_km=3, column_km=2)
+example.hm <- draw(example.hm)
+```
+
+Extract row (gene usually) clusters.
+
+```{r}
+get_hm_clust(dat = hm.dat,
+             hm = example.hm, dimension = "row") %>% 
+  head()
+```
+
+Extract column (variable or sample usually) clusters.
+
+```{r}
+get_hm_clust(dat = hm.dat,
+             hm = example.hm, dimension = "col")
+```
+
+
+# Superceded functions
+## `plot_enrich`: Lollipop plot
+
+There is also the older `plot_enrich` that only supports lollipop plots and will be deprecated once `plot_enrich2` can handle GSEA results.
+
+```{r}
+plot_enrich(enrich = enrich)
+```
+
+## `plot_fit`: Compare fit metrics
+
+There is also the original `plot_fit`, which has a subset of the `plot_fit2` parameters. Each point is a gene colored by the best fit model (delta AIC > or < 0). This plot is less preferred as it is difficult to see small changes in AIC and many genes overlap.
+
+```{r fig.width=4, fig.height=5}
+plot_fit(model_result = example.model, x="lme", 
+         model_result_y = example.model, y="lmerel")
+```
+
+# R session
+
+```{r}
+sessionInfo()
+```
+
+[R]: https://cran.r-project.org/
+[RStudio]: https://www.rstudio.com/products/rstudio/download/
+[pipeline1]: https://bigslu.github.io/SEAsnake/vignette/SEAsnake_vignette.html
+[pipeline2]: https://bigslu.github.io/tutorials/RNAseq/2.Hawn_RNAseq_counts.to.voom.html
