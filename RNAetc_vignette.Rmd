@@ -1,0 +1,404 @@
+---
+title: "RNAetc vignette"
+subtitle: "Functions helpful in RNAseq data analysis"
+author: "Kim Dill-McFarland, kadm@uw.edu"
+date: "version `r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: no
+editor_options:
+  chunk_output_type: console
+urlcolor: blue
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(fig.height=3, fig.width = 8.5) 
+```
+
+# Overview
+
+This package is a collection of functions useful in RNAseq data analysis that don't fit well into our other packages (see info-graphic). They are involved in data cleaning, data manipulation, WGCNA module analyses (mostly).
+
+![](figures/intro_diagram2-01.png)
+
+# Setup
+## Software and packages
+
+This pipeline should be completed in `r base::R.Version()$version.string` or newer. Please also download the following packages.
+
+```{r eval=FALSE}
+# CRAN packages
+install.packages(c("tidyverse","patchwork"))
+
+# Bioconductor packages
+## These are dependencies for kimma that are beneficial to download separately
+install.packages("BiocManager")
+BiocManager::install(c("limma", "edgeR"))
+
+# GitHub packages
+install.packages("devtools")
+devtools::install_github("BIGslu/kimma")
+devtools::install_github("BIGslu/BIGpicture")
+devtools::install_github("BIGslu/RNAetc")
+devtools::install_github("BIGslu/SEARchways")
+```
+
+And load them into your current R session.
+
+```{r warning=FALSE}
+library(tidyverse)
+library(edgeR)
+library(limma)
+library(RNAetc)
+library(kimma)
+library(BIGpicture)
+library(SEARchways)
+library(patchwork)
+```
+
+To ensure reproducibility with this document, set the random seed value.
+
+```{r}
+set.seed(651)
+```
+
+## Data background
+
+Example data were obtained from media controls and human rhinovirus (HRV) infected human plasmacytoid dendritic cells. You can learn more about these data in
+
+>Dill-McFarland KA, Schwartz JT, Zhao H, Shao B, Fulkerson PC, Altman MC, Gill MA. 2022. Eosinophil-mediated suppression and Anti-IL-5 enhancement of plasmacytoid dendritic cell interferon responses in asthma. J Allergy Clin Immunol. Epub ahead of print. doi: [10.1016/j.jaci.2022.03.025](https://doi.org/10.1016/j.jaci.2022.03.025). --- [GitHub](https://github.com/altman-lab/P259_pDC_public)
+
+Specifically, this vignette uses bulk human RNA-seq processed from fastq to counts using [SEAsnake][pipeline1] and counts to voom using [edgeR/limma][pipeline2]. This results in voom-normalized, log2 counts per million (CPM) gene expression and associated sample and gene metadata. In total, 6 donors and 1000 random genes were selected for this vignette. Actual donor identifiers have been altered for privacy. 
+
+## Load data
+
+Unnormalized RNAseq counts and metadata.
+
+```{r}
+example.dat <- RNAetc::example.dat
+names(example.dat)
+```
+
+Voom normalized RNAseq counts and metadata.
+
+```{r}
+example.voom <- RNAetc::example.voom
+names(example.voom)
+```
+
+Example WGCNS modules.
+
+```{r}
+example.mods <- RNAetc::example.mods
+head(example.mods)
+```
+
+# RNAseq data cleaning
+## `filter_rare`: Filter rare and low abundance genes
+
+Remove genes that are not at least X counts per million (CPM) in at least Y samples or Z% of samples. Generally applied to a `DGEList` object prior to voom normalization.
+
+```{r}
+dim(example.dat)
+
+example.dat.filter <- filter_rare(dat = example.dat,
+                                  min_CPM = 1,
+                                  min_sample = 3,
+                                  gene_var = "geneName")
+
+dim(example.dat.filter)
+```
+
+```{r}
+example.dat.filter <- filter_rare(dat = example.dat,
+                                  min_CPM = 1,
+                                  min_pct = 10,
+                                  gene_var = "geneName")
+
+dim(example.dat.filter)
+```
+
+Automatically plot the mean variance trends before and after filtering. 
+
+```{r}
+example.dat.filter <- filter_rare(dat = example.dat,
+                                  min_CPM = 1,
+                                  min_pct = 10,
+                                  gene_var = "geneName",
+                                  plot = TRUE)
+```
+
+Other parameters
+
+* Use `gene_var` to identify the column in `dat$genes` to match to rownames in `dat$counts`
+
+# RNAseq data manipulation
+## Shared parameters
+
+All of these functions can be tuned to different voom objects by setting the `libraryID` and `geneID` parameters to match column names in your data. The defaults of "libID" and "geneName", respectively.
+
+## `collapse_voom`: Combine voom object into a single dataframe
+
+Collapse a voom object by matching the `libraryID` and `geneID` columns.
+
+```{r}
+names(example.voom)
+
+dat2 <- collapse_voom(dat = example.voom)
+colnames(dat2)
+head(dat2)
+```
+
+Add the gene-level weights in `dat$weights`
+
+```{r}
+dat2 <- collapse_voom(dat = example.voom,
+                      include_weights = TRUE)
+colnames(dat2)
+```
+
+## `subset_voom`: Subset voom object
+
+Subset a voom object to specific libraries.
+
+```{r}
+dim(example.voom)
+dat.sub1 <- subset_voom(dat = example.voom,
+                        lib_keep = c("lib1","lib3"))
+dim(dat.sub1)
+```
+
+Subset a voom object to remove specific libraries.
+
+```{r}
+dim(example.voom)
+dat.sub2 <- subset_voom(dat = example.voom,
+                        lib_remove = c("lib1","lib3"))
+dim(dat.sub2)
+```
+
+Use the voom metadata to subset the object based on a logical statement. For example, keep all of the HRV infected samples. Be careful to use single quotations '' within the `lib_filter` parameter which is use double quotations "" overall.
+
+```{r}
+dim(example.voom)
+dat.sub3 <- subset_voom(dat = example.voom,
+                        lib_filter = "virus == 'HRV'")
+dim(dat.sub3)
+```
+
+Instead of subsetting libraries, you can also subset to a vector of specific genes.
+
+```{r}
+dim(example.voom)
+dat.sub4 <- subset_voom(dat = example.voom,
+                        gene_keep =c("ENSG00000000460","ENSG00000001460",
+                                     "ENSG00000002587"))
+dim(dat.sub4)
+```
+
+## `combine_voom`: Combine 2 voom objects
+
+Combine two voom objects.
+
+```{r}
+dim(dat.sub1)
+dim(dat.sub2)
+
+dat.recombine <- combine_voom(dat1 = dat.sub1, dat2 = dat.sub2)
+
+dim(dat.recombine)
+```
+
+# WGCNA modules
+
+This group of functions works around gene co-expression modules created by [`WGCNA`](https://bmcbioinformatics.biomedcentral.com/articles/10.1186/1471-2105-9-559). `fit_modules`, `make_modules`, and `compare_modules` allow a subset of parameters from `WGCNA` that we commonly utilize. If you require further customization, we recommend running `WCGNA` functions directly.
+
+## `fit_modules`: Perform soft thresholding
+
+Used to determine the power to use for WGCNA module building.
+
+```{r results=FALSE}
+mod.fit <- fit_modules(dat = example.voom)
+```
+
+```{r}
+head(mod.fit$sft)
+mod.fit$top.plot + mod.fit$connect.plot
+```
+
+Change the power levels tested. For example, decrease to improve computational time or increase if you have not reached stability fo the default 30. In all honestly, though, 1:30 is generally sufficient and weirdness can happen at higher powers.
+
+```{r results=FALSE}
+mod.fit2 <- fit_modules(dat = example.voom,
+                        powerVector = c(1:50))
+```
+
+```{r}
+head(mod.fit2$sft)
+mod.fit2$top.plot + mod.fit2$connect.plot
+```
+
+Use an "unsigned" or "signed hybrid" network instead of the default signed.
+
+```{r results=FALSE}
+mod.fit2 <- fit_modules(dat = example.voom,
+                        networkType = "unsigned")
+```
+
+```{r}
+mod.fit2$top.plot + mod.fit2$connect.plot
+```
+
+Use a subset of genes to create modules.
+
+```{r results=FALSE}
+mod.fit2 <- fit_modules(dat = example.voom,
+                        genes = example.voom$genes$geneName[1:100])
+```
+
+```{r}
+mod.fit2$top.plot + mod.fit2$connect.plot
+```
+
+## `make_modules`: Construct WGCNA modules and associated data
+
+Build modules using power based on `fit_modules` such as power that reaches an R-squared of 0.9.
+
+```{r}
+mods1 <- make_modules(fit = mod.fit,
+                      Rsq_min = 0.9)
+```
+
+Or set it by-hand based on the thresholding plot local (which is what I'd do with these data) or absolute maximum.
+
+```{r}
+mods1 <- make_modules(fit = mod.fit,
+                      sft_value = 14)
+```
+
+Provide additional results including `mods_mean` (mean gene expression by module), `mods_eigen` (eigenvalue expression by module), or `david` (DAVID formatted genes in modules data frame).
+
+```{r}
+mods1 <- make_modules(fit = mod.fit,
+                      sft_value = 14,
+                      mods_mean = TRUE,
+                      mods_eigen = TRUE,
+                      david = TRUE)
+```
+
+Other parameters
+
+* Tune your module build with the following. See `WGCNA::blockwiseConsensusModules( )` for more details.
+    - `minModuleSize`: Smallest possible module
+    - `maxBlockSize`: Maximum number of genes to include in 1 dendrogram (many dendrograms go into making modules)
+    - `deepSplit`: Build sensitivity, 0 least and 4 most sensitive
+    - `networkType`, `TOMType`: Signed, unsigned, signed hybrid network creation
+                      
+### A quick tour of module results
+
+```{r}
+names(mods1)
+```
+
+* `mods1$genes`: Vector of genes used in module build
+* `mods1$mods`: Module membership
+* `mods1$sft`: Results from `fit_modules`
+* `mods1$top.plot` and `mods1$connect.plot`: Plots from `fit_modules`
+* `mods1$mods.mean`: Mean gene expression by module
+* `mods1$mods.eigen`: Eigenvalue expression by module
+* `mods1$david`: DAVID formatted genes in modules 
+
+## `compare_modules`: Compare WGCNA module builds
+
+Used to help find the "best" module build. You can create many builds with varied R-squared, soft threshold, minimum module size, maximum block size, deep split, and/or network sign.
+
+**Recommended**: Increase `nThread` to run on multiple processors and speed up results.
+
+Compare 2 soft thresholds and 2 minimum sizes.
+
+```{r}
+comp1 <- compare_modules(fit = mod.fit,
+                         sft_value = c(10,14),
+                         minModuleSize = c(20,50),
+                         nThread = 6)
+names(comp1)
+#View parmaters
+comp1$summary
+#Summarize total genes in modules
+plyr::ldply(comp1$modules) %>% 
+  pivot_wider(names_from = `.id`, values_from = n)
+```
+
+Compare 2 R-squared and 2 deep splits. Or many other combinations...
+
+```{r eval=FALSE}
+comp2 <- compare_modules(fit = mod.fit,
+                         Rsq_min = c(0.8,0.9),
+                         deepSplit = c(1,4))
+```
+
+```
+Running 4 module builds.
+```
+
+Other parameters
+
+* Tune your module builds with the following. In this version, each can be a vector of multiple values to test and compare results. See `WGCNA::blockwiseConsensusModules( )` for more details.
+    - `minModuleSize`: Smallest possible module
+    - `maxBlockSize`: Maximum number of genes to include in 1 dendrogram (many dendrograms go into making modules)
+    - `deepSplit`: Build sensitivity, 0 least and 4 most sensitive
+    - `networkType`, `TOMType`: Signed, unsigned, signed hybrid network creation
+
+## `calculate_module_coherence`: Calculate WGCNA module coherence
+
+Calculate expression correlation between genes within modules. Compare coherence for modules built within the same data set (example below) or from another data set.
+
+```{r results=FALSE}
+coher <- calculate_module_coherence(
+  mods = mods1$mods, mods_title = "Study1",
+  dat = example.voom, dat_title = "Study1")
+```
+
+```{r}
+#correlation data
+head(coher$subgene_correlation_df)
+#Correlations and significance
+coher$coherence_boxplot_combined
+```
+
+Change the red cutoff lines in the plots.
+
+```{r results=FALSE}
+coher <- calculate_module_coherence(
+  mods = mods1$mods, mods_title = "Study1",
+  dat = example.voom, dat_title = "Study21",
+  r_cutoff = 0.5,
+  p_cutoff = 0.05)
+```
+
+```{r}
+coher$coherence_boxplot_combined
+```
+
+Other parameters
+
+* Use `mods_var` and `gene_var` to change the columns used to define modules and genes
+* `remove_mods` allows you to ignore select modules. By default, it removes the 0 or grey uncorrelated module.
+* Don't make the plots with `return_plot = FALSE`
+
+# R session
+
+```{r}
+sessionInfo()
+```
+
+[R]: https://cran.r-project.org/
+[RStudio]: https://www.rstudio.com/products/rstudio/download/
+[pipeline1]: https://bigslu.github.io/SEAsnake/vignette/SEAsnake_vignette.html
+[pipeline2]: https://bigslu.github.io/tutorials/RNAseq/2.Hawn_RNAseq_counts.to.voom.html
+
+
+
