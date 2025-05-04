@@ -325,7 +325,7 @@ comp1 <- compare_modules(fit = mod.fit,
                          minModuleSize = c(20,50),
                          nThread = 6)
 names(comp1)
-#View parmaters
+#View parameters
 comp1$summary
 #Summarize total genes in modules
 plyr::ldply(comp1$modules) %>% 
