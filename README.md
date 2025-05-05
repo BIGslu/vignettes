@@ -5,4 +5,4 @@
 - madRich: coming soon
 - pullString: coming soon
 - [RNAetc](https://bigslu.github.io/vignettes/RNAetc_vignette.html): Functions helpful in RNAseq data analysis
-- SEARchways: coming soon
+- [SEARchways](https://bigslu.github.io/vignettes/SEARchways_vignette.html): Gene set enrichment analyses
