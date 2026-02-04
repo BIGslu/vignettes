@@ -172,7 +172,32 @@ Other parameters
 * Define outliers within groups independently with `outlier_group`
 * Define a difference unique identifier column with `libraryID`
 
-Coming soon: `plot_pca2`
+## `calculate_pca`, `plot_pca2`, and `plot_pca_hm`: PCA in parts
+
+If you want to calculate PCA and have it saved to your voom object for later use, you'll want to use the `calculate_pca` function. Give it a voom object or a counts table and metadata to get back a voom object with PCA.scaled or PCA.unscaled slot (depending on if you set scaled=TRUE) or a list object with $counts, $samples, $PCA.scaled/PCA.unscaled. By default, we assume unique library IDs are contained in the column `libID`. Change this with the `libraryID` parameter.
+
+When running on unnormalized data, transform the counts to log counts per million.
+
+```{r}
+example.dat.pca <- calculate_pca(dat = example.dat,
+                                 scale = TRUE,
+                                 transform_logCPM = TRUE)
+```
+
+`plot_pca2()` essentially works the same as `plot_pca()` except it doesn't calculate the PCA, you have to run `calculate_pca()` first. If you set `scale = TRUE` in `calculate_pca()` you have to also specify it here:
+
+```{r}
+plot_pca2(dat = example.dat.pca,scale = TRUE,
+          vars=c("virus"))
+```
+
+`plot_pca_hm()` plots a heatmap of correlations between PCs and metadata variables. Also requires you to run `calculate_pca()` first. 
+
+```{r}
+plot_pca_hm(dat = example.dat.pca,
+            vars = c("median_cv_coverage","lib.size", "virus"),
+            scale=TRUE, flip_axes = FALSE)
+```
 
 # Linear modeling
 ## Model fit
